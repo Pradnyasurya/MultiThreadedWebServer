@@ -12,7 +12,7 @@ public class Client {
         return new Runnable() {
             @Override
             public void run() {
-                int port = 8181;
+                int port = 8010;
                 try {
                     InetAddress address = InetAddress.getByName("localhost");
                     Socket socket = new Socket(address, port);
