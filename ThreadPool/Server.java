@@ -1,17 +1,12 @@
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
-import java.net.ServerSocket;
-import java.net.Socket;
+import java.io.*;
+import java.net.*;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
 public class Server {
     private final ExecutorService threadPool;
+    private volatile boolean isRunning = true;
 
     public Server(int poolSize) {
         this.threadPool = Executors.newFixedThreadPool(poolSize);
@@ -20,18 +15,17 @@ public class Server {
     public void handleClient(Socket clientSocket) {
         try (
             BufferedReader fromSocket = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
-            PrintWriter toSocket = new PrintWriter(clientSocket.getOutputStream(), true);
-            clientSocket
+            PrintWriter toSocket = new PrintWriter(clientSocket.getOutputStream(), true)
         ) {
             System.out.println("Handling client from: " + clientSocket.getInetAddress());
-            
+
             // Send welcome message
             toSocket.println("Welcome! Type 'TIME' for the current time or anything else to echo it back. Type 'EXIT' to disconnect.");
 
             String clientMessage;
             while ((clientMessage = fromSocket.readLine()) != null) {
                 System.out.println("Received from client: " + clientMessage);
-                
+
                 if (clientMessage.equalsIgnoreCase("EXIT")) {
                     toSocket.println("Goodbye!");
                     break;
@@ -44,7 +38,6 @@ public class Server {
             }
         } catch (IOException ex) {
             System.err.println("Error handling client: " + ex.getMessage());
-            ex.printStackTrace();
         }
     }
 
@@ -53,33 +46,50 @@ public class Server {
         int poolSize = 10;
         Server server = new Server(poolSize);
 
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            System.out.println("\nShutdown initiated...");
+            server.shutdown();
+        }));
+
         try (ServerSocket serverSocket = new ServerSocket(port)) {
-            serverSocket.setSoTimeout(0);  // No timeout
             System.out.println("Server is listening on port " + port);
 
-            while (!Thread.currentThread().isInterrupted()) {
+            while (server.isRunning) {
                 try {
                     Socket clientSocket = serverSocket.accept();
                     System.out.println("New connection from: " + clientSocket.getInetAddress());
-                    
+
                     server.threadPool.execute(() -> server.handleClient(clientSocket));
-                } catch (IOException e) {
-                    System.err.println("Error accepting connection: " + e.getMessage());
+                } catch (SocketException se) {
+                    // Break out of the loop if server socket is closed during shutdown
+                    if (!server.isRunning) {
+                        System.out.println("Server socket closed.");
+                        break;
+                    }
+                    System.err.println("Socket error: " + se.getMessage());
+                } catch (IOException ex) {
+                    System.err.println("Error accepting connection: " + ex.getMessage());
                 }
             }
         } catch (IOException ex) {
             System.err.println("Server error: " + ex.getMessage());
-            ex.printStackTrace();
         } finally {
-            System.out.println("Shutting down server...");
-            server.threadPool.shutdown();
-            try {
-                if (!server.threadPool.awaitTermination(5, TimeUnit.SECONDS)) {
-                    server.threadPool.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                server.threadPool.shutdownNow();
-            }
+            server.shutdown();
         }
+    }
+
+    public void shutdown() {
+        isRunning = false; 
+        threadPool.shutdown();
+        try {
+            System.out.println("Waiting for active tasks to finish...");
+            if (!threadPool.awaitTermination(10, TimeUnit.SECONDS)) {
+                System.out.println("Forcing shutdown of remaining tasks...");
+                threadPool.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            threadPool.shutdownNow();
+        }
+        System.out.println("Server shutdown complete.");
     }
 }
